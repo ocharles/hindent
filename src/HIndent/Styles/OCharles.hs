@@ -10,9 +10,8 @@ module HIndent.Styles.OCharles
 import Prelude hiding (exp)
 
 import Control.Monad
-
 import Control.Applicative
-import Data.Foldable (for_)
+import Data.Foldable (for_, traverse_)
 
 import qualified HIndent.Styles.ChrisDone as ChrisDone
 import qualified HIndent.Pretty as HIndent
@@ -36,7 +35,8 @@ ocharles = HIndent.Style
       [HIndent.Extender exp
       ,HIndent.Extender match
       ,HIndent.Extender rhs
-      ,HIndent.Extender alt]
+      ,HIndent.Extender alt
+      ,HIndent.Extender decl]
   , HIndent.styleDefConfig =
       HIndent.Config
         { HIndent.configMaxColumns =
@@ -127,6 +127,7 @@ alt _ (HS.Alt _ pat (HS.UnGuardedAlt _ do'@(HS.Do{})) binds) = do
 
 alt _ a = HIndent.prettyNoExt a
 
+
 --------------------------------------------------------------------------------
 match :: s -> HS.Match HIndent.NodeInfo -> HIndent.Printer ()
 match _ (HS.Match _ name pats r mbinds) = do
@@ -136,7 +137,38 @@ match _ (HS.Match _ name pats r mbinds) = do
   for_ mbinds $ \binds -> do
     HIndent.newline
     indentSpaces <- HIndent.getIndentSpaces
-    HIndent.indented
-      indentSpaces
-      (HIndent.depend (HIndent.write "where ")
-                      (HIndent.pretty binds))
+    HIndent.indented indentSpaces $ do
+      HIndent.write "where"
+      HIndent.newline
+      HIndent.pretty binds
+
+match _ x = HIndent.prettyNoExt x
+
+--------------------------------------------------------------------------------
+decl :: s -> HS.Decl HIndent.NodeInfo -> HIndent.Printer ()
+decl _ (HS.DataDecl _ don ctx h@(HS.DHead{}) [(HS.QualConDecl _ _ _ (HS.RecDecl _ n (f1:fields@(_:_))))] deriv) = do
+  HIndent.pretty don
+  HIndent.space
+  traverse_ HIndent.pretty ctx
+  HIndent.pretty h
+  HIndent.space
+  HIndent.write "="
+  HIndent.space
+  HIndent.pretty n
+  HIndent.newline
+  HIndent.indented 2 $ do
+    HIndent.depend (HIndent.write "{" >> HIndent.space)
+                   (HIndent.pretty f1)
+    HIndent.newline
+    for_ fields $ \f -> do
+      HIndent.depend (HIndent.write "," >> HIndent.space)
+                     (HIndent.pretty f)
+      HIndent.newline
+    HIndent.write "}"
+    for_ deriv $ \(HS.Deriving _ ds) -> do
+      HIndent.newline
+      HIndent.write "deriving"
+      HIndent.space
+      HIndent.parens $ HIndent.commas $ map HIndent.pretty ds
+
+decl _ x = HIndent.prettyNoExt x
