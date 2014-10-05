@@ -51,6 +51,19 @@ instance Eq PrintState where
   PrintState ilevel out newline col line _ _ _ eolc inc == PrintState ilevel' out' newline' col' line' _ _ _ eolc' inc' =
     (ilevel,out,newline,col,line,eolc, inc) == (ilevel',out',newline',col',line',eolc', inc')
 
+
+instance Show PrintState where
+    showsPrec p (PrintState ilevel out newline col line _ _ c eolc) =
+      showParen (p >= 11)
+                (showString "PrintState {" .
+                 showString "psIndentLevel = " . showsPrec 0 ilevel . showString ", " .
+                 showString "psOutput = " . showsPrec 0 out . showString ", " .
+                 showString "psNewline = " . showsPrec 0 newline . showString ", " .
+                 showString "psColumn = " . showsPrec 0 col . showString ", " .
+                 showString "psLine = " . showsPrec 0 line . showString ", " .
+                 showString "psConfig = " . showsPrec 0 c . showString ", " .
+                 showString "psEolComment = " . showsPrec 0 eolc . showString "}")
+
 -- | A printer extender. Takes as argument the user state that the
 -- printer was run with, and the current node to print. Use
 -- 'prettyNoExt' to fallback to the built-in printer.
@@ -75,6 +88,7 @@ data Config =
          ,configIndentSpaces :: !Int64 -- ^ How many spaces to indent?
          ,configClearEmptyLines :: !Bool  -- ^ Remove spaces on lines that are otherwise empty?
          }
+  deriving (Show)
 
 instance Default Config where
   def =
