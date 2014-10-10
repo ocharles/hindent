@@ -262,6 +262,42 @@ decl _ (HS.DataDecl _ don ctx h@(HS.DHead{}) [(HS.QualConDecl _ _ _ (HS.RecDecl 
       HIndent.space
       HIndent.parens $ HIndent.commas $ map HIndent.pretty ds
 
+decl _ (HS.DataDecl _ don ctx h cons deriv) = do
+  HIndent.pretty don
+  HIndent.space
+  traverse_ HIndent.pretty ctx
+  HIndent.pretty h
+  lim <- HIndent.getColumnLimit
+  (_,s) <- HIndent.sandbox printOneLine
+  curS <- get
+  let multiLines = comparing HIndent.psLine s curS == GT
+      overflows = HIndent.psColumn s > lim
+  if multiLines || overflows
+     then do HIndent.newline
+             HIndent.indented 2 $ do
+               HIndent.write "="
+               HIndent.space
+               printMultiLines
+     else do HIndent.space
+             HIndent.write "="
+             printOneLine
+  for_ deriv $ \(HS.Deriving _ ds) -> HIndent.indented 2 $ do
+    HIndent.newline
+    HIndent.write "deriving"
+    HIndent.space
+    HIndent.parens $ HIndent.commas $ map HIndent.pretty ds
+
+  where
+  printOneLine = do
+    HIndent.space
+    sequence_ $ intersperse (HIndent.write "|" >> HIndent.space)
+              $ map HIndent.pretty cons
+
+  printMultiLines = do
+    sequence_ $ intersperse (HIndent.newline >> HIndent.write "|" >> HIndent.space)
+              $ map HIndent.pretty cons
+
+
 decl _ x = HIndent.prettyNoExt x
 
 
