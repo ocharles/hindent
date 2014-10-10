@@ -100,9 +100,28 @@ exp _ (HS.Case _ e alts) = do
     (HIndent.pretty e >> HIndent.space >>
      HIndent.write "of")
   HIndent.newline
-  HIndent.indented 2 $
-    sequence_ (intersperse (replicateM_ 2 HIndent.newline)
-                           (map HIndent.pretty alts))
+  HIndent.indented 2 $ do
+    curS <- get
+    states <- mapM (fmap snd . HIndent.sandbox . printAltInline) alts
+    if all (fitsOnOneLine curS) states
+       then sequence_ (intersperse HIndent.newline (map printAltInline alts))
+       else sequence_ (intersperse (replicateM_ 2 HIndent.newline)
+                                   (map HIndent.pretty alts))
+
+  where
+  fitsOnOneLine s s' =
+    let multiLines = comparing HIndent.psLine s' s == GT
+        overflows = HIndent.psColumn s' > HIndent.configMaxColumns (HIndent.psConfig s)
+    in not multiLines && not overflows
+
+  printAltInline (HS.Alt _ pat (HS.UnGuardedAlt _ e) Nothing) = do
+    HIndent.pretty pat
+    HIndent.space
+    HIndent.write "->"
+    HIndent.space
+    HIndent.indented 2 (HIndent.pretty e)
+
+  printALtInline alt = HIndent.pretty alt
 
 exp _ (HS.Do _ stmts) = do
   HIndent.write "do"
