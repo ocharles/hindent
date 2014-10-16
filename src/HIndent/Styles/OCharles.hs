@@ -1,3 +1,4 @@
+-- -*- hindent-style: "ocharles" -*-
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -10,10 +11,14 @@ module HIndent.Styles.OCharles
 import Prelude hiding (exp, sequence_)
 
 import Control.Applicative
-import Control.Monad (replicateM_)
-import Control.Monad.State (get)
+import Control.Monad (guard, mzero, replicateM_)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Maybe (MaybeT(MaybeT), runMaybeT)
+import Control.Monad.Trans.State.Strict (State)
+import Control.Monad.State (get, put)
 import Data.Foldable (for_, sequence_, traverse_)
 import Data.List (intersperse)
+import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
 
 import qualified HIndent.Styles.ChrisDone as ChrisDone
@@ -21,7 +26,7 @@ import qualified HIndent.Pretty as HIndent
 import qualified HIndent.Types as HIndent
 import qualified Language.Haskell.Exts.Annotated.Syntax as HS
 
-data State = State
+data EmptyState = EmptyState
 
 --------------------------------------------------------------------------------
 ocharles :: HIndent.Style
@@ -34,7 +39,7 @@ ocharles =
     , HIndent.styleDescription =
         "ocharles's personal style"
     , HIndent.styleInitialState =
-        State
+        EmptyState
     , HIndent.styleExtenders =
         [HIndent.Extender exp
         ,HIndent.Extender match
@@ -45,10 +50,9 @@ ocharles =
         ,HIndent.Extender stmt]
     , HIndent.styleDefConfig =
         HIndent.Config
-          { HIndent.configMaxColumns =
-              80
-          , HIndent.configIndentSpaces =
-              2
+          { HIndent.configMaxColumns = 80
+          , HIndent.configIndentSpaces = 2
+          , HIndent.configClearEmptyLines = False
           }
     }
 
@@ -104,23 +108,23 @@ exp _ (HS.Case _ e alts) = do
     curS <- get
     states <- mapM (fmap snd . HIndent.sandbox . printAltInline) alts
     if all (fitsOnOneLine curS) states
-       then sequence_ (intersperse HIndent.newline (map printAltInline alts))
-       else sequence_ (intersperse (replicateM_ 2 HIndent.newline)
-                                   (map HIndent.pretty alts))
-
+      then sequence_ (intersperse HIndent.newline
+                                  (map printAltInline alts))
+      else sequence_ (intersperse (replicateM_ 2 HIndent.newline)
+                                  (map HIndent.pretty alts))
   where
   fitsOnOneLine s s' =
     let multiLines = comparing HIndent.psLine s' s == GT
-        overflows = HIndent.psColumn s' > HIndent.configMaxColumns (HIndent.psConfig s)
+        overflows =
+          HIndent.psColumn s' >
+          HIndent.configMaxColumns (HIndent.psConfig s)
     in not multiLines && not overflows
-
   printAltInline (HS.Alt _ pat (HS.UnGuardedAlt _ e) Nothing) = do
     HIndent.pretty pat
     HIndent.space
     HIndent.write "->"
     HIndent.space
     HIndent.indented 2 (HIndent.pretty e)
-
   printALtInline alt = HIndent.pretty alt
 
 exp _ (HS.Do _ stmts) = do
@@ -133,36 +137,62 @@ exp _ (HS.Do _ stmts) = do
 
 exp _ (HS.RecConstr _ name fields) = do
   HIndent.pretty name
-  HIndent.newline
-  HIndent.indented 2 $
-    do
-      HIndent.string "{"
-      case fields of
-        [f] ->
-          HIndent.indented 2 $ do
-            HIndent.space
-            HIndent.pretty f
-            HIndent.space
+  case fields of
+    [] ->
+      return ()
 
-        [] ->
-          return ()
+    _ -> do
+      HIndent.newline
+      HIndent.indented 2 $ do
+        case fields of
+          [f] -> do
+            HIndent.string "{"
+            HIndent.space
+            HIndent.indented 4 $ do
+              HIndent.pretty f
+            HIndent.space
+            HIndent.string "}"
 
-        (f:fs) -> do
-          HIndent.space
-          HIndent.indented 2
-                           (HIndent.pretty f)
-          HIndent.newline
-          for_ fs $
-            \f' ->
-              do
-                HIndent.comma
-                HIndent.space
-                HIndent.indented 2 $
-                  HIndent.pretty f'
-                HIndent.newline
-      HIndent.string "}"
+          _ -> do
+            let prefix (f : fs) = do
+                  HIndent.depend (HIndent.string "{" >> HIndent.space) f
+                  HIndent.newline
+                  for_ fs $ \p -> do
+                    HIndent.depend (HIndent.comma >> HIndent.space) p
+                    HIndent.newline
+
+            runMaybeT (try . prefix $ map (prettyPrintOneLine . fieldUpdOneline) fields)
+              >>= maybe (prefix $ map HIndent.pretty fields) return
+
+            HIndent.string "}"
+
+  where
+  try :: MaybeT HIndent.Printer () -> MaybeT HIndent.Printer ()
+  try m = do
+    s <- get
+    e <- lift (runMaybeT m)
+    maybe (put s >> mzero) return e
+
+  fieldUpdOneline (HS.FieldUpdate _ n e) = do
+    HIndent.pretty n
+    HIndent.space
+    HIndent.write "="
+    HIndent.space
+    HIndent.pretty e
+  fieldUpdOneline e = HIndent.pretty e
 
 exp _ e = HIndent.prettyNoExt e
+
+prettyPrintOneLine :: HIndent.Printer () -> MaybeT HIndent.Printer ()
+prettyPrintOneLine p = do
+  s <- get
+  (_, s') <- lift (HIndent.sandbox p)
+  let multiLines = comparing HIndent.psLine s' s == GT
+      overflows =
+        HIndent.psColumn s' >
+        HIndent.configMaxColumns (HIndent.psConfig s)
+  guard (not multiLines && not overflows)
+  lift p
 
 --------------------------------------------------------------------------------
 stmt :: s -> HS.Stmt HIndent.NodeInfo -> HIndent.Printer ()
@@ -251,10 +281,9 @@ decl _ (HS.DataDecl _ don ctx h@(HS.DHead{}) [(HS.QualConDecl _ _ _ (HS.RecDecl 
     HIndent.depend (HIndent.write "{" >> HIndent.space)
                    (HIndent.pretty f1)
     HIndent.newline
-    for_ fields $ \f -> do
+    sequence_ $ intersperse HIndent.newline $ flip map fields $ \f -> do
       HIndent.depend (HIndent.write "," >> HIndent.space)
                      (HIndent.pretty f)
-      HIndent.newline
     HIndent.write "}"
     for_ deriv $ \(HS.Deriving _ ds) -> do
       HIndent.newline
