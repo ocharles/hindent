@@ -1,17 +1,17 @@
 -- -*- hindent-style: "ocharles" -*-
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | ocharles' style.
 
-module HIndent.Styles.OCharles
-  (ocharles)
-  where
+module HIndent.Styles.OCharles (ocharles) where
 
 import Prelude hiding (exp, sequence_)
 
 import Control.Applicative
 import Control.Monad (guard, mzero, replicateM_)
+import Control.Monad.State (MonadState)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Maybe (MaybeT(MaybeT), runMaybeT)
 import Control.Monad.Trans.State.Strict (State)
@@ -29,48 +29,65 @@ import qualified Language.Haskell.Exts.Annotated.Syntax as HS
 data EmptyState = EmptyState
 
 --------------------------------------------------------------------------------
+newtype OneLine a = OneLine { unOneLine :: MaybeT HIndent.Printer a }
+  deriving (Monad, MonadState HIndent.PrintState)
+
+class Newline m where
+  newline :: m ()
+
+instance Newline OneLine where
+  newline = OneLine mzero
+
+instance Newline HIndent.Printer where
+  newline = HIndent.newline
+
+oneLineOrMulti :: OneLine a -> HIndent.Printer a -> HIndent.Printer a
+oneLineOrMulti a b = do
+  x <- runMaybeT (unOneLine a)
+  case x of
+    Just a -> return a
+    Nothing -> b
+
+--------------------------------------------------------------------------------
 ocharles :: HIndent.Style
-ocharles =
-  HIndent.Style
-    { HIndent.styleName =
-        "ocharles"
-    , HIndent.styleAuthor =
-        "Oliver Charles"
-    , HIndent.styleDescription =
-        "ocharles's personal style"
-    , HIndent.styleInitialState =
-        EmptyState
-    , HIndent.styleExtenders =
-        [HIndent.Extender exp
-        ,HIndent.Extender match
-        ,HIndent.Extender rhs
-        ,HIndent.Extender alt
-        ,HIndent.Extender decl
-        ,HIndent.Extender ty
-        ,HIndent.Extender stmt]
-    , HIndent.styleDefConfig =
-        HIndent.Config
-          { HIndent.configMaxColumns = 80
-          , HIndent.configIndentSpaces = 2
-          , HIndent.configClearEmptyLines = False
-          }
-    }
+ocharles = HIndent.Style
+  { HIndent.styleName =
+      "ocharles"
+  , HIndent.styleAuthor =
+      "Oliver Charles"
+  , HIndent.styleDescription =
+      "ocharles's personal style"
+  , HIndent.styleInitialState =
+      EmptyState
+  , HIndent.styleExtenders =
+      [HIndent.Extender exp
+      ,HIndent.Extender match
+      ,HIndent.Extender rhs
+      ,HIndent.Extender alt
+      ,HIndent.Extender decl
+      ,HIndent.Extender ty
+      ,HIndent.Extender stmt]
+  , HIndent.styleDefConfig =
+      HIndent.Config
+        { HIndent.configMaxColumns = 80
+        , HIndent.configIndentSpaces = 2
+        , HIndent.configClearEmptyLines = False
+        }
+  }
 
 --------------------------------------------------------------------------------
 rhs :: s -> HS.Rhs HIndent.NodeInfo -> HIndent.Printer ()
 rhs _ (HS.UnGuardedRhs _ e) = do
-  case e of
-    HS.Do{} -> do
-      HIndent.write " = "
-      HIndent.pretty e
-
-    _ -> do
-      indentSpaces <- HIndent.getIndentSpaces
-      HIndent.indented
-        indentSpaces
-        (ChrisDone.dependOrNewline (HIndent.write " = ")
-                                   e
-                                   HIndent.pretty)
+  HIndent.space
+  HIndent.rhsSeparator
+  oneLineOrMulti
+    (do
+       HIndent.space
+       HIndent.pretty e)
+    (do
+       newline
+       HIndent.indented 2
+                        (HIndent.pretty e))
 
 rhs _ e = HIndent.prettyNoExt e
 
@@ -81,8 +98,7 @@ exp s app@(HS.App{}) = ChrisDone.exp s app
 
 exp _ (HS.Lambda _ pats e) = do
   HIndent.write "\\"
-  HIndent.spaced $
-    map HIndent.pretty pats
+  HIndent.spaced (map HIndent.pretty pats)
   HIndent.write " -> "
   inlineOrSwing (HIndent.pretty e)
 
@@ -95,37 +111,41 @@ exp _ (HS.InfixApp _ l op@(HS.QVarOp _ (HS.UnQual _ (HS.Symbol _ "$"))) r)
       HIndent.space
       HIndent.pretty r
 
-exp s app@(HS.InfixApp{}) = ChrisDone.exp s app
+exp s app@(HS.InfixApp _ l op r) = do
+  HIndent.pretty l
+  HIndent.space
+  HIndent.pretty op
+  HIndent.space
+  HIndent.pretty r
 
 exp _ (HS.Case _ e alts) = do
-  HIndent.depend
-    (HIndent.write "case" >>
-     HIndent.space)
-    (HIndent.pretty e >> HIndent.space >>
-     HIndent.write "of")
+  HIndent.depend (HIndent.write "case" >> HIndent.space)
+                 (HIndent.pretty e >> HIndent.space >> HIndent.write "of")
   HIndent.newline
-  HIndent.indented 2 $ do
-    curS <- get
-    states <- mapM (fmap snd . HIndent.sandbox . printAltInline) alts
-    if all (fitsOnOneLine curS) states
-      then sequence_ (intersperse HIndent.newline
-                                  (map printAltInline alts))
-      else sequence_ (intersperse (replicateM_ 2 HIndent.newline)
-                                  (map HIndent.pretty alts))
+  HIndent.withCaseContext
+    True
+    (HIndent.indented
+       2
+       (do
+          curS <- get
+          states <- mapM (fmap snd . HIndent.sandbox . printAltInline) alts
+          if all (fitsOnOneLine curS) states
+             then sequence_ (intersperse HIndent.newline
+                                         (map printAltInline alts))
+             else sequence_ (intersperse (replicateM_ 2 HIndent.newline)
+                                         (map HIndent.pretty alts))))
   where
   fitsOnOneLine s s' =
     let multiLines = comparing HIndent.psLine s' s == GT
-        overflows =
-          HIndent.psColumn s' >
-          HIndent.configMaxColumns (HIndent.psConfig s)
+        overflows = HIndent.psColumn s' > HIndent.configMaxColumns (HIndent.psConfig s)
     in not multiLines && not overflows
-  printAltInline (HS.Alt _ pat (HS.UnGuardedAlt _ e) Nothing) = do
-    HIndent.pretty pat
-    HIndent.space
-    HIndent.write "->"
-    HIndent.space
-    HIndent.indented 2 (HIndent.pretty e)
-  printALtInline alt = HIndent.pretty alt
+  -- printAltInline (HS.Alt _ pat (HS.UnGuardedAlt _ e) Nothing) = do
+  --   HIndent.pretty pat
+  --   HIndent.space
+  --   HIndent.write "->"
+  --   HIndent.space
+  --   HIndent.indented 2 (HIndent.pretty e)
+  printAltInline alt = HIndent.pretty alt
 
 exp _ (HS.Do _ stmts) = do
   HIndent.write "do"
@@ -238,12 +258,12 @@ isFlat _ = False
 
 --------------------------------------------------------------------------------
 alt :: s -> HS.Alt HIndent.NodeInfo -> HIndent.Printer ()
-alt _ (HS.Alt _ pat (HS.UnGuardedAlt _ do'@(HS.Do{})) binds) = do
-  HIndent.pretty pat
-  HIndent.space
-  HIndent.write "->"
-  HIndent.space
-  HIndent.pretty do'
+-- alt _ (HS.Alt _ pat (HS.UnGuardedAlt _ do'@(HS.Do{})) binds) = do
+--   HIndent.pretty pat
+--   HIndent.space
+--   HIndent.write "->"
+--   HIndent.space
+--   HIndent.pretty do'
 
 alt _ a = HIndent.prettyNoExt a
 

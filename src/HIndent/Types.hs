@@ -53,7 +53,7 @@ instance Eq PrintState where
 
 
 instance Show PrintState where
-    showsPrec p (PrintState ilevel out newline col line _ _ c eolc) =
+    showsPrec p (PrintState ilevel out newline col line _ _ c eolc ic) =
       showParen (p >= 11)
                 (showString "PrintState {" .
                  showString "psIndentLevel = " . showsPrec 0 ilevel . showString ", " .
@@ -62,7 +62,8 @@ instance Show PrintState where
                  showString "psColumn = " . showsPrec 0 col . showString ", " .
                  showString "psLine = " . showsPrec 0 line . showString ", " .
                  showString "psConfig = " . showsPrec 0 c . showString ", " .
-                 showString "psEolComment = " . showsPrec 0 eolc . showString "}")
+                 showString "psEolComment = " . showsPrec 0 eolc . showString ", " .
+                 showString "psInsideCase = " . showsPrec 0 ic . showString "}")
 
 -- | A printer extender. Takes as argument the user state that the
 -- printer was run with, and the current node to print. Use
